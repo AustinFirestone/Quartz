@@ -1,86 +1,148 @@
-//
-//  ContentView.swift
-//  Quartz
-//
-//  Created by Austin Firestone on 10/6/24.
-//
-
 import SwiftUI
 import CoreData
 
 struct ContentView: View {
-    @Environment(\.managedObjectContext) private var viewContext
-
     @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: true)],
-        animation: .default)
-    private var items: FetchedResults<Item>
-
+        entity: SubjectEntity.entity(),
+        sortDescriptors: [NSSortDescriptor(keyPath: \SubjectEntity.name, ascending: true)]
+    ) private var fetchedSubjects: FetchedResults<SubjectEntity>
+    
+    @State private var isPresentingNewSubjectView = false
+    @Environment(\.managedObjectContext) private var viewContext
+    @State private var selectedSubject: SubjectEntity?
+    
     var body: some View {
-        NavigationView {
+        NavigationStack {
             List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp!, formatter: itemFormatter)")
-                    } label: {
-                        Text(item.timestamp!, formatter: itemFormatter)
+                ForEach(fetchedSubjects) { subject in
+                    NavigationLink(destination: SubjectDetailView(subject: subject)) {
+                        HStack {
+                            Text(subject.name ?? "Unnamed")
+                                .font(.headline)
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Text("\(subject.timeSessions?.count ?? 0) Sessions")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
-                .onDelete(perform: deleteItems)
+                .onDelete(perform: deleteSubject)
             }
+            .navigationTitle("Subjects")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
+                    Button(action: {
+                        isPresentingNewSubjectView = true
+                    }) {
+                        Label("New Subject", systemImage: "plus")
                     }
                 }
             }
-            Text("Select an item")
-        }
-    }
-
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(context: viewContext)
-            newItem.timestamp = Date()
-
-            do {
-                try viewContext.save()
-            } catch {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-                let nsError = error as NSError
-                fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
+            .sheet(isPresented: $isPresentingNewSubjectView) {
+                NewSubjectView(isPresented: $isPresentingNewSubjectView)
             }
         }
     }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            offsets.map { items[$0] }.forEach(viewContext.delete)
-
-            do {
-                try viewContext.save()
-            } catch {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-                let nsError = error as NSError
-                fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
-            }
+    
+    private func deleteSubject(at offsets: IndexSet) {
+        offsets.map { fetchedSubjects[$0] }.forEach(viewContext.delete)
+        saveContext()
+    }
+    
+    private func saveContext() {
+        do {
+            try viewContext.save()
+        } catch {
+            print("Failed to save Core Data context: \(error.localizedDescription)")
         }
     }
 }
 
-private let itemFormatter: DateFormatter = {
-    let formatter = DateFormatter()
-    formatter.dateStyle = .short
-    formatter.timeStyle = .medium
-    return formatter
-}()
-
-#Preview {
-    ContentView().environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
+// MARK: - Subject Detail View
+struct SubjectDetailView: View {
+    let subject: SubjectEntity
+    
+    var body: some View {
+        List {
+            ForEach(subject.timeSessionsArray, id: \.id) { session in
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text("Session")
+                            .font(.headline)
+                        Text("\(session.startTime ?? Date(), formatter: sessionDateFormatter) - \(session.endTime ?? Date(), formatter: sessionDateFormatter)")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+        .navigationTitle(subject.name ?? "Unnamed")
+    }
+    
+    private var sessionDateFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }
 }
+
+// MARK: - New Subject View
+struct NewSubjectView: View {
+    @Binding var isPresented: Bool
+    @Environment(\.managedObjectContext) private var viewContext
+    @State private var subjectName: String = ""
+    
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(header: Text("Subject Name")) {
+                    TextField("Enter subject name", text: $subjectName)
+                }
+            }
+            .navigationTitle("New Subject")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        isPresented = false
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        addSubject()
+                        isPresented = false
+                    }
+                }
+            }
+        }
+    }
+    
+    private func addSubject() {
+        let newSubject = SubjectEntity(context: viewContext)
+        newSubject.id = UUID()
+        newSubject.name = subjectName
+        newSubject.timeSessions = NSSet(array: [])
+        
+        saveContext()
+    }
+    
+    private func saveContext() {
+        do {
+            try viewContext.save()
+        } catch {
+            print("Failed to save Core Data context: \(error.localizedDescription)")
+        }
+    }
+}
+
+// MARK: - Core Data Helpers
+extension SubjectEntity {
+    var timeSessionsArray: [TimeSessionEntity] {
+        let set = timeSessions as? Set<TimeSessionEntity> ?? []
+        return set.sorted {
+            $0.startTime ?? Date() < $1.startTime ?? Date()
+        }
+    }
+}
+
